@@ -2,6 +2,10 @@ import socket
 import threading
 import tkinter as tk
 from tkinter import messagebox
+import pygame  # Usaremos Pygame para efectos visuales
+
+# Inicializar pygame
+pygame.init()
 
 class Servidor:
     def __init__(self, host, puerto):
@@ -49,8 +53,12 @@ class Servidor:
                 # Procesar los datos recibidos
                 self.jugadores[jugador_id] = tuple(map(int, datos.split(',')))
 
+                # Verificar ataques y actualizar la salud
+                self.procesar_ataques()
+
                 # Actualizar la lista de jugadores
-                estado_jugadores = "|".join([f"{x},{y},{salud},{int(atacando)},{int(defendiendo)}" for x, y, salud, atacando, defendiendo in self.jugadores.values()])
+                estado_jugadores = "|".join([f"{x},{y},{salud},{int(atacando)},{int(defendiendo)}" 
+                                             for x, y, salud, atacando, defendiendo in self.jugadores.values()])
                 cliente_socket.sendall(estado_jugadores.encode('utf-8'))
 
         except (ConnectionResetError, BrokenPipeError):
@@ -60,6 +68,47 @@ class Servidor:
                 del self.jugadores[jugador_id]
             self.actualizar_lista_jugadores()
             cliente_socket.close()
+
+    def procesar_ataques(self):
+        """
+        Verifica si un jugador está atacando y si hay colisión con otro jugador.
+        Si hay colisión, reduce la salud del jugador atacado.
+        """
+        for jugador_id, (x, y, salud, atacando, defendiendo) in self.jugadores.items():
+            if atacando:
+                # Mostrar animación de ataque
+                self.mostrar_efecto_ataque(jugador_id)
+
+                # Verificar si hay colisión con otro jugador
+                for otro_id, (x_otro, y_otro, salud_otro, atacando_otro, defendiendo_otro) in self.jugadores.items():
+                    if jugador_id != otro_id:
+                        # Comprobamos la proximidad del ataque (ajustar el rango según el juego)
+                        if abs(x - x_otro) < 50 and abs(y - y_otro) < 50:
+                            if not defendiendo_otro:  # Si el otro jugador no está defendiendo
+                                nueva_salud = salud_otro - 20  # Reducir la salud en 20 (ajustable)
+                                nueva_salud = max(nueva_salud, 0)  # Asegurarse de que la salud no sea negativa
+                                self.jugadores[otro_id] = (x_otro, y_otro, nueva_salud, atacando_otro, defendiendo_otro)
+                                print(f"Jugador {otro_id} ha sido atacado. Salud restante: {nueva_salud}")
+
+            if defendiendo:
+                # Mostrar animación de defensa
+                self.mostrar_efecto_defensa(jugador_id)
+
+    def mostrar_efecto_ataque(self, jugador_id):
+        """
+        Muestra un efecto visual de ataque en el jugador.
+        """
+        print(f"Jugador {jugador_id} está atacando! (Visualización de ataque)")
+
+        # Aquí puedes agregar un cambio visual, por ejemplo, cambiar el color del jugador o mostrar una animación
+
+    def mostrar_efecto_defensa(self, jugador_id):
+        """
+        Muestra un efecto visual de defensa en el jugador.
+        """
+        print(f"Jugador {jugador_id} está defendiendo! (Visualización de defensa)")
+
+        # Aquí puedes agregar un cambio visual, como poner un borde alrededor del jugador o hacer que se ilumine
 
     def actualizar_lista_jugadores(self):
         """
