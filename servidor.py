@@ -1,112 +1,101 @@
 import socket
 import threading
-import random
 import time
-
-class Enemigo:
-    def __init__(self, x, y, salud):
-        self.x = x
-        self.y = y
-        self.salud = salud
-
-    def mover(self, jugadores):
-        """
-        Mueve al enemigo hacia el jugador más cercano.
-        """
-        if jugadores:
-            jugador_cercano = min(jugadores, key=lambda j: abs(self.x - j[0]) + abs(self.y - j[1]))
-            if self.x < jugador_cercano[0]:
-                self.x += 2  # Velocidad del enemigo
-            elif self.x > jugador_cercano[0]:
-                self.x -= 2
-            if self.y < jugador_cercano[1]:
-                self.y += 2
-            elif self.y > jugador_cercano[1]:
-                self.y -= 2
+import random
+from enemigos import Enemigo
 
 class Servidor:
     def __init__(self, host, puerto):
-        self.host = host
-        self.puerto = puerto
-        self.servidor_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        self.servidor_socket.bind((self.host, self.puerto))
-        self.servidor_socket.listen(5)
-
-        self.jugadores = {}  # {id: (x, y, salud)}
+        self.servidor = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        self.servidor.bind((host, puerto))
+        self.servidor.listen()
+        print("Servidor en espera de conexiones...")
+        self.jugadores = {}  # Diccionario de jugadores: {id: {'x': x, 'y': y, 'salud': salud}}
         self.enemigos = []
-        self.oleada_actual = 1
-        self.servidor_activo = True
+        self.oleada = 0
+        self.lock = threading.Lock()
 
-        threading.Thread(target=self.manejar_oleadas, daemon=True).start()
-
-    def manejar_cliente(self, cliente_socket, id_jugador):
-        """
-        Manejador para cada cliente conectado.
-        """
-        self.jugadores[id_jugador] = (50, 50, 100)  # Posición inicial (x, y, salud)
+    def manejar_cliente(self, conexion, direccion):
+        jugador_id = len(self.jugadores) + 1
+        # Cambiar a diccionario para los jugadores
+        self.jugadores[jugador_id] = {'x': random.randint(50, 750), 'y': random.randint(50, 550), 'salud': 100}  # Posición inicial y salud
+        print(f"Jugador {jugador_id} conectado desde {direccion}")
 
         try:
             while True:
-                datos = cliente_socket.recv(1024).decode('utf-8')
+                datos = conexion.recv(1024).decode()
                 if not datos:
                     break
-                
-                # Depuración: imprimir los datos recibidos
-                print(f"Jugador {id_jugador} envió: {datos}")
 
-                # Validar y procesar datos
-                partes = datos.split(',')
-                if len(partes) == 3:
-                    try:
-                        x, y, salud = map(int, partes)
-                        self.jugadores[id_jugador] = (x, y, salud)
-                    except ValueError:
-                        print(f"Error al convertir los datos del jugador {id_jugador}: {datos}")
-                else:
-                    print(f"Formato inválido recibido de jugador {id_jugador}: {datos}")
+                # Procesar datos del cliente
+                partes = datos.split('|')
+                x, y, salud = map(int, partes[0].split(','))  # Posición y salud
+                ataques = [tuple(map(int, a.split(','))) for a in partes[1].split(';') if a]  # Ataques enviados por el jugador
 
-                # Enviar datos de jugadores y enemigos a todos los clientes
-                estado_jugadores = "|".join([f"{x},{y},{salud}" for x, y, salud in self.jugadores.values()])
-                estado_enemigos = "|".join([f"{e.x},{e.y},{e.salud}" for e in self.enemigos])
-                cliente_socket.sendall(f"{estado_jugadores}#ENEMIGOS#{estado_enemigos}".encode('utf-8'))
-        except (ConnectionResetError, BrokenPipeError):
-            print(f"Jugador {id_jugador} desconectado.")
+                with self.lock:
+                    # Cambiar la forma de asignar la posición y salud
+                    self.jugadores[jugador_id] = {'x': x, 'y': y, 'salud': salud}
+
+                    # Procesar ataques a enemigos
+                    for ataque in ataques:
+                        for enemigo in self.enemigos:
+                            if abs(ataque[0] - enemigo.x) < 50 and abs(ataque[1] - enemigo.y) < 50:
+                                enemigo.salud -= 25  # Daño al enemigo
+
+                    # Eliminar enemigos muertos
+                    self.enemigos = [e for e in self.enemigos if e.salud > 0]
+
+                # Enviar datos de jugadores y enemigos
+                enemigos_datos = ';'.join([f"{e.x},{e.y},{e.salud}" for e in self.enemigos])
+                jugadores_datos = ';'.join([f"{k},{v['x']},{v['y']},{v['salud']}" for k, v in self.jugadores.items()])
+                conexion.sendall(f"{enemigos_datos}|{jugadores_datos}".encode())
+
+        except Exception as e:
+            print(f"Error con jugador {jugador_id}: {e}")
         finally:
-            if id_jugador in self.jugadores:
-                del self.jugadores[id_jugador]
-            cliente_socket.close()
+            with self.lock:
+                del self.jugadores[jugador_id]
+            print(f"Jugador {jugador_id} desconectado")
+            conexion.close()
 
+    def iniciar_oleadas(self):
+        while True:
+            time.sleep(10)  # Tiempo entre oleadas
+            self.oleada += 1
+            print(f"Iniciando oleada {self.oleada}")
+            num_enemigos = self.oleada * 2
+            for _ in range(num_enemigos):
+                enemigo = Enemigo(random.randint(0, 800), random.randint(0, 600), 100, random.randint(1, 3))
+                self.enemigos.append(enemigo)
 
-    def manejar_oleadas(self):
-        """
-        Controla las oleadas de enemigos.
-        """
-        while self.servidor_activo:
-            if not self.enemigos:  # Nueva oleada si no hay enemigos
-                self.oleada_actual += 1
-                print(f"Iniciando oleada {self.oleada_actual}")
-                for _ in range(self.oleada_actual * 5):  # Más enemigos con cada oleada
-                    x = random.randint(0, 800)
-                    y = random.randint(0, 600)
-                    self.enemigos.append(Enemigo(x, y, 50))
+    def actualizar_enemigos(self):
+            while True:
+                time.sleep(0.1)  # Actualización cada 100 ms
+                with self.lock:
+                    for enemigo in self.enemigos:
+                        # Mover enemigo hacia el jugador más cercano
+                        if self.jugadores:
+                            # Corregir el acceso a las coordenadas del jugador
+                            jugador_cercano = min(self.jugadores.values(), key=lambda j: ((j['x'] - enemigo.x) ** 2 + (j['y'] - enemigo.y) ** 2) ** 0.5)
+                            enemigo.mover_hacia(jugador_cercano['x'], jugador_cercano['y'])
 
-            # Mover enemigos
-            jugadores = list(self.jugadores.values())
-            for enemigo in self.enemigos[:]:  # Copia para evitar problemas al eliminar
-                enemigo.mover(jugadores)
-                if enemigo.salud <= 0:
-                    self.enemigos.remove(enemigo)
+                        # Ataque a jugadores
+                        for jugador_id, jugador in self.jugadores.items():
+                            if abs(enemigo.x - jugador['x']) < 50 and abs(enemigo.y - jugador['y']) < 50:
+                                nuevo_salud = max(jugador['salud'] - 10, 0)
+                                self.jugadores[jugador_id] = {'x': jugador['x'], 'y': jugador['y'], 'salud': nuevo_salud}
 
-            time.sleep(0.05)  # Control de velocidad de actualización
+                    # Eliminar enemigos muertos
+                    self.enemigos = [e for e in self.enemigos if e.salud > 0]
 
     def iniciar(self):
-        print("Servidor en espera de conexiones...")
-        while self.servidor_activo:
-            cliente_socket, _ = self.servidor_socket.accept()
-            id_jugador = len(self.jugadores) + 1
-            print(f"Jugador {id_jugador} conectado.")
-            threading.Thread(target=self.manejar_cliente, args=(cliente_socket, id_jugador), daemon=True).start()
+        threading.Thread(target=self.iniciar_oleadas, daemon=True).start()
+        threading.Thread(target=self.actualizar_enemigos, daemon=True).start()
+
+        while True:
+            conexion, direccion = self.servidor.accept()
+            threading.Thread(target=self.manejar_cliente, args=(conexion, direccion), daemon=True).start()
 
 if __name__ == "__main__":
-    servidor = Servidor('127.0.0.1', 5555)
+    servidor = Servidor("127.0.0.1", 5555)
     servidor.iniciar()
